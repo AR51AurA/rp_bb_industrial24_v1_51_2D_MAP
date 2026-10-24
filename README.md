@@ -7,7 +7,8 @@ install python for hot-saving functionality
 OR run via html file.
 
 # readme.txt
-City 24i Map
+
+## City 24i Map
 ============
 
 A zoomable top-down map of the city in rp_bb_industrial24, with coloured
