@@ -1,0 +1,1186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>City 24i Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one-screen map app. The map fills the frame; a HUD-style district panel docks right (bottom sheet on phones). */
+:root {
+  --void: #10141a;          /* outside the map */
+  --panel: rgba(20, 25, 32, 0.92);
+  --panel-solid: #161b22;
+  --line: #2b333d;
+  --ink: #e4e8ec;
+  --ink-dim: #93a0ad;
+  --hud: #f2b134;           /* HL2 HUD amber: UI chrome only, never a district */
+  --hud-ink: #1a1306;
+  --danger: #ef5b5b;
+  --f-display: "Saira Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--void); color: var(--ink); font: 14px/1.4 var(--f-body);
+  overflow: hidden; -webkit-tap-highlight-color: transparent;
+}
+#app { position: relative; height: 100%; display: flex; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--hud); outline-offset: 2px; }
+
+/* ---------- map ---------- */
+.stage { position: relative; flex: 1; min-width: 0; overflow: hidden; touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.stage.panning { cursor: grabbing; }
+.stage svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.tile { image-rendering: auto; }
+.district { fill-opacity: .14; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; cursor: pointer; transition: fill-opacity .12s; }
+.district:hover, .district.hot { fill-opacity: .26; }
+.district.sel { fill-opacity: .22; stroke-width: 3; }
+.hide-fill .district { fill-opacity: 0; }
+.hide-fill .district:hover, .hide-fill .district.sel { fill-opacity: .16; }
+.label { font-family: var(--f-display); font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  paint-order: stroke; stroke: #0b0e12; stroke-linejoin: round; pointer-events: none; text-anchor: middle; dominant-baseline: middle; }
+.hide-labels .label { display: none; }
+.handle { fill: #0b0e12; stroke-width: 2; vector-effect: non-scaling-stroke; cursor: move; }
+.handle.mid { fill: #0b0e12; stroke-dasharray: 2 2; cursor: copy; opacity: .8; }
+.handle.picked { fill: var(--hud); }
+
+/* HUD chrome over the map */
+.hud { position: absolute; display: flex; gap: 6px; z-index: 2; }
+.hud.top { top: 12px; left: max(12px, env(safe-area-inset-left, 0px)); right: 12px; align-items: flex-start; flex-wrap: wrap; pointer-events: none; }
+.hud.top > * { pointer-events: auto; }
+.brand { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--hud); padding: 6px 12px 7px; border-radius: 2px; }
+.brand h1 { margin: 0; font: 700 20px/1 var(--f-display); letter-spacing: .08em; text-transform: uppercase; }
+.brand p { margin: 3px 0 0; font: 400 11px/1.2 var(--f-mono); color: var(--ink-dim); letter-spacing: .02em; }
+.toolbar { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); padding: 4px; border-radius: 2px; flex-wrap: wrap; }
+.tb { min-width: 34px; height: 30px; padding: 0 10px; border: 1px solid transparent; background: transparent; border-radius: 2px;
+  font: 600 13px/1 var(--f-display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-dim); }
+.tb:hover { color: var(--ink); background: #222a33; }
+.tb[aria-pressed="true"] { color: var(--hud); border-color: rgba(242,177,52,.45); background: rgba(242,177,52,.08); }
+.tb.primary { color: var(--hud-ink); background: var(--hud); }
+.tb.primary:hover { background: #ffc24d; color: var(--hud-ink); }
+.zoom { position: absolute; z-index: 2; right: 12px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); flex-direction: column; display: flex;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 2px; }
+.zoom button { width: 36px; height: 34px; border: 0; background: transparent; font: 600 18px/1 var(--f-display); color: var(--ink-dim); }
+.zoom button + button { border-top: 1px solid var(--line); }
+.zoom button:hover { color: var(--ink); background: #222a33; }
+.readout { position: absolute; z-index: 2; left: max(12px, env(safe-area-inset-left, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start; pointer-events: none; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 2px; padding: 5px 9px; font: 400 12px/1.2 var(--f-mono); color: var(--ink-dim);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chip b { color: var(--ink); font-weight: 500; }
+.scalebar { display: flex; flex-direction: column; gap: 3px; }
+.scalebar .bar { height: 6px; border: 2px solid var(--ink); border-top: 0; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; white-space: normal; max-width: min(560px, 60vw); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { flex: none; width: 10px; height: 10px; border-radius: 1px; display: inline-block; border: 1px solid #0006; }
+
+/* ---------- depth levels ---------- */
+.level { transition: opacity .35s ease; }
+.level.off { opacity: 0; pointer-events: none; }
+.level.ghost { opacity: .16; pointer-events: none; }
+.brand h1 span { color: var(--hud); font-weight: 600; }
+.brand h1 span:not(:empty)::before { content: "/ "; color: var(--ink-dim); }
+.depth { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.depth-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.depth h2 { margin: 0; font: 700 15px/1 var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--hud); }
+.ghost { font: 400 11px/1 var(--f-mono); color: var(--ink-dim); display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.ghost input { accent-color: var(--hud); margin: 0; }
+.levels { display: flex; flex-direction: column; position: relative; padding-left: 18px; }
+.levels::before { content: ""; position: absolute; left: 5px; top: 12px; bottom: 12px; width: 2px; background: var(--line); }
+.lvl { position: relative; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 2px; padding: 6px 10px; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+.lvl::before { content: ""; position: absolute; left: -18px; top: 11px; width: 8px; height: 8px; border: 2px solid var(--ink-dim); background: var(--panel-solid); border-radius: 50%; }
+.lvl:hover { background: #1c222a; }
+.lvl[aria-checked="true"] { border-color: rgba(242,177,52,.45); background: rgba(242,177,52,.07); }
+.lvl[aria-checked="true"]::before { border-color: var(--hud); background: var(--hud); }
+.lvl b { font: 600 15px/1.1 var(--f-display); letter-spacing: .06em; text-transform: uppercase; color: var(--ink); }
+.lvl[aria-checked="true"] b { color: var(--hud); }
+.lvl small { grid-column: 1 / 3; font: 400 11px/1.3 var(--f-mono); color: var(--ink-dim); display: none; }
+.lvl[aria-checked="true"] small { display: block; }
+.mv { font: 600 12px/1 var(--f-display); letter-spacing: .06em; text-transform: uppercase; padding: 4px 6px; border: 1px solid var(--line); background: var(--panel-solid); border-radius: 2px; color: var(--ink-dim); }
+.lvl .n { font: 400 11px/1.1 var(--f-mono); color: var(--ink-dim); align-self: center; }
+
+/* ---------- panel ---------- */
+.panel { width: 320px; flex: none; background: var(--panel-solid); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;
+  padding-right: env(safe-area-inset-right, 0px); }
+.panel-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.panel-head h2 { margin: 0; font: 700 15px/1 var(--f-display); letter-spacing: .12em; text-transform: uppercase; color: var(--hud); }
+.panel-head .count { font: 400 12px var(--f-mono); color: var(--ink-dim); }
+.sheet-toggle { display: none; }
+.list { list-style: none; margin: 0; padding: 6px 0; overflow-y: auto; flex: 1; min-height: 0; }
+.row { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 5px 12px 5px 16px; border-left: 3px solid transparent; }
+.row:hover { background: #1c222a; }
+.row.sel { background: #1f262f; border-left-color: var(--c); }
+.sw { width: 18px; height: 18px; border-radius: 2px; border: 1px solid #0008; background: var(--c); position: relative; overflow: hidden; padding: 0; }
+.sw input { position: absolute; inset: -6px; width: 34px; height: 34px; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.name { min-width: 0; width: 100%; background: transparent; border: 1px solid transparent; border-radius: 2px; padding: 4px 6px;
+  font: 600 15px/1.1 var(--f-display); letter-spacing: .05em; text-transform: uppercase; }
+.name:hover { border-color: var(--line); }
+.name:focus { border-color: var(--hud); background: #0f1318; outline: none; text-transform: none; letter-spacing: .01em; }
+.name[readonly] { cursor: pointer; }
+.name[readonly]:hover { border-color: transparent; }
+.go { width: 28px; height: 28px; border: 0; background: transparent; color: var(--ink-dim); border-radius: 2px; font: 500 15px/1 var(--f-mono); }
+.go:hover { color: var(--ink); background: #2a323c; }
+.detail { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 2px 0 6px 6px; font: 400 11px/1.3 var(--f-mono); color: var(--ink-dim); }
+.detail .act { font: 600 12px/1 var(--f-display); letter-spacing: .08em; text-transform: uppercase; padding: 5px 8px; border: 1px solid var(--line); background: transparent; border-radius: 2px; color: var(--ink-dim); }
+.detail .act:hover { color: var(--ink); border-color: #44505c; }
+.detail .act.warn { color: var(--danger); border-color: rgba(239,91,91,.4); }
+.swatches { display: flex; gap: 4px; flex-wrap: wrap; width: 100%; }
+.swatches button { width: 16px; height: 16px; border-radius: 2px; border: 1px solid #0008; padding: 0; background: var(--c); }
+.swatches button[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+.panel-foot { border-top: 1px solid var(--line); padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; }
+.foot-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.foot-row .tb { border-color: var(--line); color: var(--ink); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.note { margin: 0; font-size: 12px; color: var(--ink-dim); }
+.savebar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: rgba(242,177,52,.08); border: 1px solid rgba(242,177,52,.35); padding: 6px 8px; border-radius: 2px; }
+.savebar .msg { flex: 1; min-width: 120px; font-size: 12px; color: var(--ink); }
+.status { font-size: 12px; color: var(--ink-dim); min-height: 1em; }
+.status.err { color: var(--danger); }
+.help { font: 400 11px/1.5 var(--f-mono); color: var(--ink-dim); margin: 0; }
+.help kbd { font: inherit; color: var(--ink); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 2px; padding: 0 4px; }
+.empty { padding: 20px 16px; color: var(--ink-dim); font-size: 13px; }
+
+@media (max-width: 760px) {
+  #app { flex-direction: column; }
+  .panel { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: 46%; padding-right: 0;
+    padding-left: max(0px, env(safe-area-inset-left, 0px)); }
+  .panel.collapsed .list, .panel.collapsed .panel-foot { display: none; }
+  .sheet-toggle { display: inline-block; }
+  .zoom { bottom: 12px; }
+  .readout { bottom: 12px; }
+  .legend { display: none; }
+  .brand p { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="application/json" id="seed">
+{
+ "version": 1,
+ "districts": [
+  {
+   "id": "d1",
+   "name": "Train Station",
+   "color": "#F2B134",
+   "points": [
+    [
+     -5250,
+     1900
+    ],
+    [
+     -1090,
+     1900
+    ],
+    [
+     -1090,
+     3840
+    ],
+    [
+     -5250,
+     3840
+    ]
+   ]
+  },
+  {
+   "id": "d2",
+   "name": "Loyalist Housing",
+   "color": "#4FC3F7",
+   "points": [
+    [
+     -300,
+     3760
+    ],
+    [
+     520,
+     3760
+    ],
+    [
+     520,
+     4300
+    ],
+    [
+     -300,
+     4300
+    ]
+   ]
+  },
+  {
+   "id": "d4",
+   "name": "CMU",
+   "color": "#7BD389",
+   "points": [
+    [
+     392,
+     2440
+    ],
+    [
+     1280,
+     2440
+    ],
+    [
+     1288,
+     3128
+    ],
+    [
+     1040,
+     3312
+    ],
+    [
+     640,
+     3320
+    ],
+    [
+     384,
+     3072
+    ]
+   ]
+  },
+  {
+   "id": "d5",
+   "name": "CWU",
+   "color": "#C792EA",
+   "points": [
+    [
+     -512,
+     2432
+    ],
+    [
+     0,
+     2440
+    ],
+    [
+     120,
+     2552
+    ],
+    [
+     128,
+     3072
+    ],
+    [
+     0,
+     3200
+    ],
+    [
+     -512,
+     3204
+    ]
+   ]
+  },
+  {
+   "id": "d6",
+   "name": "Nexus",
+   "color": "#FF8A50",
+   "points": [
+    [
+     2448,
+     2440
+    ],
+    [
+     2736,
+     2400
+    ],
+    [
+     3152,
+     2440
+    ],
+    [
+     3464,
+     4096
+    ],
+    [
+     3472,
+     4848
+    ],
+    [
+     2480,
+     4840
+    ]
+   ]
+  },
+  {
+   "id": "d7",
+   "name": "Ration Distribution",
+   "color": "#4DD0C9",
+   "points": [
+    [
+     2790,
+     4220
+    ],
+    [
+     3350,
+     4220
+    ],
+    [
+     3350,
+     4820
+    ],
+    [
+     2790,
+     4820
+    ]
+   ]
+  },
+  {
+   "id": "d8",
+   "name": "Metropol",
+   "color": "#F06EAA",
+   "points": [
+    [
+     3560,
+     1950
+    ],
+    [
+     3880,
+     1950
+    ],
+    [
+     3880,
+     2530
+    ],
+    [
+     3560,
+     2530
+    ]
+   ]
+  },
+  {
+   "id": "d9",
+   "name": "Construction Site",
+   "color": "#B5D33D",
+   "points": [
+    [
+     3884,
+     1472
+    ],
+    [
+     5084,
+     1472
+    ],
+    [
+     5072,
+     1720
+    ],
+    [
+     6528,
+     1728
+    ],
+    [
+     6560,
+     3192
+    ],
+    [
+     5768,
+     3200
+    ],
+    [
+     5776,
+     3600
+    ],
+    [
+     4224,
+     3584
+    ],
+    [
+     4224,
+     3032
+    ],
+    [
+     3912,
+     3024
+    ]
+   ]
+  },
+  {
+   "id": "d10",
+   "name": "Diordna Housing",
+   "color": "#8FA8FF",
+   "points": [
+    [
+     3950,
+     4720
+    ],
+    [
+     4630,
+     4720
+    ],
+    [
+     4630,
+     5020
+    ],
+    [
+     3950,
+     5020
+    ]
+   ]
+  },
+  {
+   "id": "d11",
+   "name": "Terminal Square",
+   "color": "#FFD166",
+   "points": [
+    [
+     2550,
+     5100
+    ],
+    [
+     4600,
+     5100
+    ],
+    [
+     4600,
+     6100
+    ],
+    [
+     2550,
+     6100
+    ]
+   ]
+  },
+  {
+   "id": "d12",
+   "name": "Grizzly Grotto",
+   "color": "#E57373",
+   "points": [
+    [
+     5100,
+     4870
+    ],
+    [
+     7140,
+     4870
+    ],
+    [
+     7140,
+     5460
+    ],
+    [
+     5100,
+     5460
+    ]
+   ]
+  },
+  {
+   "id": "d13",
+   "name": "Slums",
+   "color": "#64B5F6",
+   "points": [
+    [
+     6064,
+     3240
+    ],
+    [
+     7512,
+     3192
+    ],
+    [
+     7528,
+     4392
+    ],
+    [
+     6840,
+     4392
+    ],
+    [
+     6832,
+     4768
+    ],
+    [
+     6672,
+     4752
+    ],
+    [
+     6680,
+     4248
+    ],
+    [
+     6272,
+     4200
+    ],
+    [
+     6264,
+     3928
+    ],
+    [
+     6536,
+     3920
+    ],
+    [
+     6512,
+     3680
+    ],
+    [
+     6072,
+     3656
+    ]
+   ]
+  },
+  {
+   "id": "d14",
+   "name": "Slums Housing",
+   "color": "#D4A373",
+   "points": [
+    [
+     6728,
+     1132
+    ],
+    [
+     7832,
+     1136
+    ],
+    [
+     7880,
+     2176
+    ],
+    [
+     7904,
+     3192
+    ],
+    [
+     6728,
+     3212
+    ]
+   ]
+  },
+  {
+   "id": "d15",
+   "name": "Maintenance",
+   "color": "#9CCC65",
+   "points": [
+    [
+     6560,
+     4470
+    ],
+    [
+     7990,
+     4470
+    ],
+    [
+     7990,
+     4760
+    ],
+    [
+     6560,
+     4760
+    ]
+   ]
+  },
+  {
+   "id": "dmvmren1i",
+   "name": "Plaza",
+   "color": "#EF5B5B",
+   "points": [
+    [
+     1264,
+     3032
+    ],
+    [
+     2408,
+     3032
+    ],
+    [
+     2416,
+     4808
+    ],
+    [
+     3440,
+     4816
+    ],
+    [
+     3456,
+     5096
+    ],
+    [
+     2432,
+     5096
+    ],
+    [
+     2024,
+     5096
+    ],
+    [
+     2016,
+     4576
+    ],
+    [
+     1896,
+     4560
+    ],
+    [
+     1896,
+     4088
+    ],
+    [
+     1272,
+     4088
+    ],
+    [
+     1280,
+     3816
+    ]
+   ]
+  }
+ ]
+}
+</script>
+<script>
+(() => {
+  // ---- map raster: rp_bb_industrial24 world brushes rendered top-down at 3 Hammer units per pixel
+  const MAP = { W: 4586, H: 3184, X0: -5312, Y1: 7440, U: 3 };
+  // Depth levels, top to bottom. Each is its own top-down render of the VMF.
+  // Underground floor plans. Where floors stack, the upper one is drawn half see-through with
+  // hatching so the passage under it still shows, and its walls stay crisp.
+  const LEVELS = [
+    { id: "city", name: "City level", sub: "Streets and rooftops · z 64 to 1664", tiles: [["t00.webp", 0, 0, 2295, 1594], ["t01.webp", 2293, 0, 2293, 1594], ["t10.webp", 0, 1592, 2295, 1592], ["t11.webp", 2293, 1592, 2293, 1592]],
+      legend: [["#8a9298", "Rooftops"], ["#5c646c", "Streets"], ["#626854", "Ground"], ["#224254", "Water"]] },
+    { id: "sewers", name: "Sewers", sub: "Canals, tunnels and basements · z −456 to 40", tiles: [["s00.webp", 0, 0, 2295, 1594], ["s01.webp", 2293, 0, 2293, 1594], ["s10.webp", 0, 1592, 2295, 1592], ["s11.webp", 2293, 1592, 2293, 1592]], legend: [["#7a7668", "Walkways"], ["#265c68", "Water"], ["#c4bca6", "Walls"], ["repeating-linear-gradient(135deg, #b4ad98 0 2px, #4e4c44 2px 5px)", "Hatched: floor above another"]] },
+    { id: "nexus", name: "Nexus underground", sub: "Nexus basement, firing range, rail tunnel · z −608 to −96", tiles: [["n00.webp", 0, 0, 2295, 1594], ["n01.webp", 2293, 0, 2293, 1594], ["n10.webp", 0, 1592, 2295, 1592], ["n11.webp", 2293, 1592, 2293, 1592]], legend: [["#7a7668", "Walkways"], ["#265c68", "Water"], ["#c4bca6", "Walls"], ["repeating-linear-gradient(135deg, #b4ad98 0 2px, #4e4c44 2px 5px)", "Hatched: floor above another"]] },
+  ];
+  const LEVEL_ALIAS = { upper: "sewers", lower: "sewers", canals: "sewers", deep: "nexus" };   // names used by earlier versions
+  const LEVEL_IDS = LEVELS.map((l) => l.id);
+  const normLevel = (l) => (LEVEL_IDS.includes(l) ? l : LEVEL_ALIAS[l] || "city");
+  const UNITS_PER_M = 52.49;   // Source: 1 unit = 0.75 in
+  const PALETTE = ["#F2B134", "#4FC3F7", "#EF5B5B", "#7BD389", "#C792EA", "#FF8A50", "#4DD0C9", "#F06EAA",
+                   "#B5D33D", "#8FA8FF", "#FFD166", "#E57373", "#64B5F6", "#D4A373", "#9CCC65", "#BA68C8"];
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const toImg = ([x, y]) => [(x - MAP.X0) / MAP.U, (MAP.Y1 - y) / MAP.U];
+  const toWorld = (ix, iy) => [MAP.X0 + ix * MAP.U, MAP.Y1 - iy * MAP.U];
+  const store = {
+    get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+  };
+
+  // ---- state
+  let districts = [];            // [{id, name, color, points:[[x,y]...]}] in Hammer units
+  let savedJSON = "[]";
+  let selected = null, editing = false, canSave = false, canEdit = false;
+  const view = { k: 0.25, tx: 0, ty: 0 };
+  let level = normLevel(store.get("c24map.level"));
+  const levelOf = (d) => normLevel(d.level);
+  const shown = () => districts.filter((d) => levelOf(d) === level);
+  const labelOf = (d) => gLabels.querySelector(`[data-id="${d.id}"]`);
+
+  // ---- DOM
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <div class="stage" id="stage">
+      <svg id="svg" aria-label="Top-down map of the city">
+        <g id="world"><g id="tiles"></g><g id="shapes"></g><g id="labels"></g><g id="handles"></g></g>
+      </svg>
+      <div class="hud top">
+        <div class="brand"><h1>City 24i <span id="levelName"></span></h1><p id="levelSub">rp_bb_industrial24</p></div>
+        <div class="toolbar" role="toolbar" aria-label="Map options">
+          <button class="tb" id="tLabels" aria-pressed="true">Labels</button>
+          <button class="tb" id="tFill" aria-pressed="true">Fill</button>
+          <button class="tb" id="tEdit" aria-pressed="false" hidden>Edit shapes</button>
+        </div>
+      </div>
+      <div class="readout">
+        <div class="legend chip" id="legend" aria-label="Surface key"></div>
+        <div class="chip scalebar" id="scale"><div class="bar" id="scaleBar"></div><span id="scaleTxt"></span></div>
+        <div class="chip" id="coords">x <b>—</b> y <b>—</b></div>
+      </div>
+      <div class="zoom" aria-label="Zoom">
+        <button id="zIn" aria-label="Zoom in">+</button><button id="zOut" aria-label="Zoom out">−</button><button id="zFit" aria-label="Fit map" style="font-size:12px">FIT</button>
+      </div>
+    </div>
+    <aside class="panel" id="panel">
+      <section class="depth" aria-label="Depth">
+        <div class="depth-head"><h2>Depth</h2><label class="ghost"><input type="checkbox" id="ghost"> Show level above</label></div>
+        <div class="levels" id="levels" role="radiogroup" aria-label="Map level"></div>
+      </section>
+      <div class="panel-head">
+        <h2>Districts</h2>
+        <span class="count" id="count"></span>
+        <button class="tb sheet-toggle" id="sheet" aria-expanded="true">Hide</button>
+      </div>
+      <ul class="list" id="list"><li class="empty">Loading districts…</li></ul>
+      <div class="panel-foot">
+        <div class="savebar" id="savebar" hidden>
+          <span class="msg" id="saveMsg">Unsaved changes</span>
+          <button class="tb primary" id="save">Save</button>
+          <button class="tb" id="discard">Discard</button>
+        </div>
+        <div class="foot-row">
+          <button class="tb" id="add" hidden>+ District</button>
+          <button class="tb" id="copy">Copy JSON</button>
+          <button class="tb" id="export">Export</button>
+          <button class="tb" id="import">Import</button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden>
+        </div>
+        <div class="status" id="status" role="status"></div>
+        <p class="help" id="help">Drag to pan · scroll or pinch to zoom · click a district to select it</p>
+      </div>
+    </aside>`;
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"), svg = $("svg"), world = $("world"), gShapes = $("shapes"), gLabels = $("labels"), gHandles = $("handles");
+
+  for (const L of LEVELS) {
+    const g = document.createElementNS(SVGNS, "g");
+    g.setAttribute("class", "level off"); g.dataset.level = L.id;
+    for (const [src, x, y, w, h] of L.tiles) {
+      const im = document.createElementNS(SVGNS, "image");
+      im.setAttribute("href", src); im.setAttribute("x", x); im.setAttribute("y", y);
+      im.setAttribute("width", w); im.setAttribute("height", h); im.setAttribute("class", "tile");
+      im.setAttribute("preserveAspectRatio", "none");
+      g.appendChild(im);
+    }
+    $("tiles").appendChild(g);
+  }
+
+  // ---- geometry helpers
+  function centroid(pts) {
+    let a = 0, cx = 0, cy = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length], f = x0 * y1 - x1 * y0;
+      a += f; cx += (x0 + x1) * f; cy += (y0 + y1) * f;
+    }
+    if (Math.abs(a) < 1e-6) return pts[0];
+    return [cx / (3 * a), cy / (3 * a)];
+  }
+  const area = (pts) => Math.abs(pts.reduce((s, [x0, y0], i) => { const [x1, y1] = pts[(i + 1) % pts.length]; return s + x0 * y1 - x1 * y0; }, 0) / 2);
+  const bounds = (pts) => pts.reduce((b, [x, y]) => [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)], [Infinity, Infinity, -Infinity, -Infinity]);
+  const snap = (v) => Math.round(v / 8) * 8;   // Hammer-style 8 unit grid
+
+  // ---- view
+  function applyView() {
+    world.setAttribute("transform", `translate(${view.tx} ${view.ty}) scale(${view.k})`);
+    gLabels.childNodes.forEach((t, i) => {
+      const fs = t.dataset.big ? 17 : 14;
+      t.setAttribute("font-size", fs / view.k); t.setAttribute("stroke-width", 3.5 / view.k);
+      // like a game map: a name shows once its district is big enough on screen to hold it
+      const fits = (+t.dataset.w) * view.k >= t.textContent.length * fs * 0.52 || t.dataset.id === selected;
+      t.style.display = fits ? "" : "none";
+    });
+    for (const h of gHandles.children) h.setAttribute("r", (h.classList.contains("mid") ? 4.5 : 6) / view.k);
+    // scale bar: largest nice length under ~120px
+    const upp = MAP.U / view.k; let len = 64;
+    for (const n of [64, 128, 256, 512, 1024, 2048, 4096]) if (n / upp <= 130) len = n;
+    $("scaleBar").style.width = (len / upp) + "px";
+    $("scaleTxt").textContent = `${len} u ≈ ${(len / UNITS_PER_M).toFixed(len < 512 ? 1 : 0)} m`;
+    store.set("c24map.view", view);
+  }
+  function fit(b, pad = 40) {   // b in image px
+    const r = stage.getBoundingClientRect();
+    const k = Math.min((r.width - pad * 2) / (b[2] - b[0]), (r.height - pad * 2) / (b[3] - b[1]));
+    view.k = Math.max(0.05, Math.min(k, 6));
+    view.tx = r.width / 2 - view.k * (b[0] + b[2]) / 2;
+    view.ty = r.height / 2 - view.k * (b[1] + b[3]) / 2;
+    applyView();
+  }
+  const fitAll = () => fit([0, 0, MAP.W, MAP.H], 20);
+  function zoomAt(sx, sy, f) {
+    const k = Math.max(0.05, Math.min(view.k * f, 6));
+    view.tx = sx - (sx - view.tx) * (k / view.k); view.ty = sy - (sy - view.ty) * (k / view.k); view.k = k; applyView();
+  }
+  const screenToImg = (sx, sy) => [(sx - view.tx) / view.k, (sy - view.ty) / view.k];
+  const localXY = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+
+  // ---- rendering
+  function render() {
+    gShapes.textContent = ""; gLabels.textContent = "";
+    for (const d of shown()) {
+      const p = document.createElementNS(SVGNS, "polygon");
+      p.setAttribute("points", d.points.map((q) => toImg(q).join(",")).join(" "));
+      p.setAttribute("class", "district" + (d.id === selected ? " sel" : ""));
+      p.setAttribute("fill", d.color); p.setAttribute("stroke", d.color);
+      p.dataset.id = d.id;
+      gShapes.appendChild(p);
+      const t = document.createElementNS(SVGNS, "text");
+      const [cx, cy] = toImg(centroid(d.points));
+      t.setAttribute("x", cx); t.setAttribute("y", cy); t.setAttribute("class", "label"); t.setAttribute("fill", d.color); t.dataset.id = d.id;
+      if (area(d.points) > 1.5e6) t.dataset.big = "1";
+      const bb = bounds(d.points); t.dataset.w = Math.max(bb[2] - bb[0], (bb[3] - bb[1]) * 0.8) / MAP.U;
+      t.textContent = d.name || "Unnamed";
+      gLabels.appendChild(t);
+    }
+    // selected on top
+    const sel = gShapes.querySelector(".sel"); if (sel) gShapes.appendChild(sel);
+    renderHandles(); renderList(); applyView(); updateSavebar();
+  }
+  function renderHandles() {
+    gHandles.textContent = "";
+    const d = districts.find((x) => x.id === selected);
+    if (!editing || !d) return;
+    d.points.forEach((q, i) => {
+      const n = d.points[(i + 1) % d.points.length];
+      const [mx, my] = toImg([(q[0] + n[0]) / 2, (q[1] + n[1]) / 2]);
+      const m = document.createElementNS(SVGNS, "circle");
+      m.setAttribute("cx", mx); m.setAttribute("cy", my); m.setAttribute("class", "handle mid"); m.setAttribute("stroke", d.color);
+      m.dataset.mid = i; gHandles.appendChild(m);
+    });
+    d.points.forEach((q, i) => {
+      const [x, y] = toImg(q);
+      const c = document.createElementNS(SVGNS, "circle");
+      c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("class", "handle" + (i === pickedPt ? " picked" : "")); c.setAttribute("stroke", d.color);
+      c.dataset.pt = i; gHandles.appendChild(c);
+    });
+  }
+  let pickedPt = -1;
+
+  function renderList() {
+    const list = $("list");
+    renderLevels();
+    const vis = shown(), L = LEVELS.find((x) => x.id === level);
+    $("count").textContent = vis.length ? `${vis.length}` : "";
+    if (!vis.length) {
+      list.innerHTML = `<li class="empty">${canEdit ? `No districts on ${esc(L.name)} yet. Press “+ District” to outline one here.` : `No districts on ${esc(L.name)} yet.`}</li>`;
+      return;
+    }
+    const active = document.activeElement && document.activeElement.classList.contains("name") ? document.activeElement.dataset.id : null;
+    list.textContent = "";
+    for (const d of vis) {
+      const li = document.createElement("li");
+      li.className = "row" + (d.id === selected ? " sel" : ""); li.style.setProperty("--c", d.color); li.dataset.id = d.id;
+      li.innerHTML = `
+        <span class="sw" title="Colour">${canEdit ? `<input type="color" aria-label="Colour for ${esc(d.name)}" id="c-${d.id}" value="${d.color.toLowerCase()}">` : ""}</span>
+        <input class="name" id="n-${d.id}" data-id="${d.id}" value="${esc(d.name)}" aria-label="District name" ${canEdit ? "" : "readonly"} spellcheck="false" maxlength="48">
+        <button class="go" aria-label="Zoom to ${esc(d.name)}" title="Zoom to district">⌖</button>`;
+      if (d.id === selected) {
+        const det = document.createElement("div"); det.className = "detail";
+        const m2 = area(d.points) / (UNITS_PER_M * UNITS_PER_M);
+        det.innerHTML = `<span>${d.points.length} points · ${Math.round(m2).toLocaleString()} m²</span>` +
+          (canEdit ? `<div class="swatches">${PALETTE.map((c) => `<button style="--c:${c}" data-c="${c}" aria-label="Use colour ${c}" aria-pressed="${c.toLowerCase() === d.color.toLowerCase()}"></button>`).join("")}</div>
+            <label><span class="sr">Level</span> <select class="mv" id="mv-${d.id}" aria-label="Move ${esc(d.name)} to another level">${LEVELS.map((L) => `<option value="${L.id}"${L.id === levelOf(d) ? " selected" : ""}>${esc(L.name)}</option>`).join("")}</select></label>
+            <button class="act" data-act="shape">${editing ? "Done editing shape" : "Edit shape"}</button>
+            ${editing && pickedPt >= 0 && d.points.length > 3 ? `<button class="act" data-act="delpt">Remove point</button>` : ""}
+            <button class="act warn" data-act="del">Delete district</button>` : "");
+        li.appendChild(det);
+      }
+      list.appendChild(li);
+    }
+    if (active) { const el = $("n-" + active); if (el && document.activeElement !== el) { el.focus(); el.select(); } }
+    const selRow = list.querySelector(".row.sel"); if (selRow && !active) selRow.scrollIntoView({ block: "nearest" });
+  }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // ---- changes
+  const serial = () => JSON.stringify(districts);
+  const dirty = () => serial() !== savedJSON;
+  function changed() { store.set("c24map.draft", { base: savedJSON, districts }); updateSavebar(); }
+  function updateSavebar() {
+    const d = canEdit && dirty();
+    $("savebar").hidden = !d;
+    $("save").hidden = !canSave;
+    $("saveMsg").textContent = "Unsaved changes";
+  }
+  function select(id, { zoom = false } = {}) {
+    if (selected !== id) pickedPt = -1;
+    selected = id;
+    if (!id) editing = false;
+    $("tEdit").setAttribute("aria-pressed", String(editing));
+    render();
+    if (zoom && id) {
+      const d = districts.find((x) => x.id === id), b = bounds(d.points);
+      const [ax, ay] = toImg([b[0], b[3]]), [bx, by] = toImg([b[2], b[1]]);
+      fit([ax, ay, bx, by], 90);
+    }
+  }
+  function setStatus(msg, err = false) { const s = $("status"); s.textContent = msg; s.classList.toggle("err", err); }
+
+  // ---- panel events
+  $("list").addEventListener("click", (e) => {
+    const row = e.target.closest(".row"); if (!row) return;
+    const id = row.dataset.id, d = districts.find((x) => x.id === id);
+    if (e.target.closest(".go")) { select(id, { zoom: true }); return; }
+    const sw = e.target.closest(".swatches button");
+    if (sw) { d.color = sw.dataset.c; changed(); render(); return; }
+    const act = e.target.closest(".act");
+    if (act) {
+      if (act.dataset.act === "shape") { editing = !editing; pickedPt = -1; $("tEdit").setAttribute("aria-pressed", String(editing)); render(); }
+      else if (act.dataset.act === "delpt") { d.points.splice(pickedPt, 1); pickedPt = -1; changed(); render(); }
+      else if (act.dataset.act === "del") {
+        if (act.dataset.confirm) { districts = districts.filter((x) => x.id !== id); selected = null; editing = false; changed(); render(); setStatus(`Deleted ${d.name}.`); }
+        else { act.dataset.confirm = "1"; act.textContent = "Click again to delete"; }
+      }
+      return;
+    }
+    if (e.target.closest(".detail") || e.target.closest(".sw")) return;
+    if (id !== selected) select(id);
+  });
+  $("list").addEventListener("focusin", (e) => {
+    if (e.target.classList.contains("name") && e.target.dataset.id !== selected) { selected = e.target.dataset.id; pickedPt = -1; render(); }
+  });
+  $("list").addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.classList.contains("name")) {
+      const d = districts.find((x) => x.id === t.dataset.id); d.name = t.value;
+      const lb = labelOf(d); if (lb) lb.textContent = d.name || "Unnamed";
+      applyView(); changed();
+    } else if (t.type === "color") {
+      const d = districts.find((x) => "c-" + x.id === t.id); d.color = t.value.toUpperCase();
+      const p = gShapes.querySelector(`[data-id="${d.id}"]`), lb = labelOf(d);
+      p.setAttribute("fill", d.color); p.setAttribute("stroke", d.color); if (lb) lb.setAttribute("fill", d.color);
+      t.closest(".row").style.setProperty("--c", d.color);
+      changed();
+    }
+  });
+  $("list").addEventListener("change", (e) => {
+    if (e.target.type === "color") render();
+    else if (e.target.classList.contains("mv")) {
+      const d = districts.find((x) => "mv-" + x.id === e.target.id); if (!d) return;
+      d.level = e.target.value; changed();
+      const id = d.id; setLevel(d.level); select(id);
+      setStatus(`Moved ${d.name || "the district"} to ${LEVELS.find((x) => x.id === d.level).name}.`);
+    }
+  });
+  $("list").addEventListener("keydown", (e) => { if (e.target.classList.contains("name") && e.key === "Enter") e.target.blur(); });
+
+  $("tLabels").onclick = (e) => { const on = e.currentTarget.getAttribute("aria-pressed") !== "true"; e.currentTarget.setAttribute("aria-pressed", on); stage.classList.toggle("hide-labels", !on); store.set("c24map.labels", on); };
+  $("tFill").onclick = (e) => { const on = e.currentTarget.getAttribute("aria-pressed") !== "true"; e.currentTarget.setAttribute("aria-pressed", on); stage.classList.toggle("hide-fill", !on); store.set("c24map.fill", on); };
+  $("tEdit").onclick = () => {
+    if (!selected) { setStatus("Select a district first, then edit its shape."); return; }
+    editing = !editing; pickedPt = -1; $("tEdit").setAttribute("aria-pressed", String(editing)); render();
+  };
+  $("zIn").onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.5); };
+  $("zOut").onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / 1.5); };
+  $("zFit").onclick = fitAll;
+  $("sheet").onclick = (e) => { const p = $("panel"); const c = p.classList.toggle("collapsed"); e.currentTarget.textContent = c ? "Show" : "Hide"; e.currentTarget.setAttribute("aria-expanded", String(!c)); };
+
+  $("add").onclick = () => {
+    const r = stage.getBoundingClientRect();
+    const [cx, cy] = toWorld(...screenToImg(r.width / 2, r.height / 2));
+    const hw = snap(Math.max(128, 90 * MAP.U / view.k)), hh = snap(Math.max(96, 60 * MAP.U / view.k));
+    const x = snap(cx), y = snap(cy);
+    const used = new Set(districts.map((d) => d.color));
+    const d = { id: "d" + Date.now().toString(36), name: "New district", level, color: PALETTE.find((c) => !used.has(c)) || PALETTE[districts.length % PALETTE.length],
+      points: [[x - hw, y - hh], [x + hw, y - hh], [x + hw, y + hh], [x - hw, y + hh]] };
+    districts.push(d); editing = true; changed(); select(d.id);
+    const n = $("n-" + d.id); if (n) { n.focus(); n.select(); }
+  };
+  $("copy").onclick = async () => {
+    const text = JSON.stringify({ map: "rp_bb_industrial24", units: "hammer", districts: districts.map(({ name, color, points, ...d }) => ({ name, level: levelOf(d), color, points })) }, null, 2);
+    try { await navigator.clipboard.writeText(text); setStatus("Copied district outlines as JSON (Hammer x/y units)."); }
+    catch { setStatus("Your browser blocked copying. Allow clipboard access and try again.", true); }
+  };
+  $("discard").onclick = () => { districts = JSON.parse(savedJSON); store.del("c24map.draft"); selected = null; editing = false; render(); setStatus("Changes discarded."); };
+  $("save").onclick = async () => {
+    const btn = $("save"); btn.disabled = true;
+    const data = { version: 1, districts };
+    try {
+      if (mode === "server") {
+        setStatus("Saving…");
+        const r = await fetch("api/districts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data, null, 1) });
+        if (!r.ok) throw new Error(await r.text());
+        setStatus("Saved to districts.json.");
+      } else {
+        store.set("c24map.saved", data);
+        setStatus("Saved in this browser. Use Export to keep a copy as a file.");
+      }
+      savedJSON = serial(); store.del("c24map.draft"); updateSavebar();
+    } catch (err) {
+      setStatus(mode === "server" ? "Couldn't save. Is the map window (Run City Map) still open? Your changes are still here." : "Couldn't save in this browser. Use Export to keep your changes.", true);
+    } finally { btn.disabled = false; }
+  };
+  function download(name, text) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  $("export").onclick = () => { download("districts.json", JSON.stringify({ version: 1, districts }, null, 1)); setStatus("Exported districts.json."); };
+  $("import").onclick = () => $("importFile").click();
+  $("importFile").onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = "";
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      const list = Array.isArray(data) ? data : data.districts;
+      if (!Array.isArray(list)) throw new Error("no districts");
+      districts = list.map((d, i) => ({ id: String(d.id || "d" + Date.now().toString(36) + i), name: String(d.name || ""),
+        level: normLevel(d.level),
+        color: /^#[0-9a-f]{6}$/i.test(d.color) ? d.color : PALETTE[i % PALETTE.length],
+        points: (d.points || []).map((p) => [+p[0], +p[1]]) })).filter((d) => d.points.length >= 3);
+      selected = null; editing = false; changed(); render();
+      setStatus(`Imported ${districts.length} districts from ${f.name}. Press Save to keep them.`);
+    } catch { setStatus(`${f.name} isn't a district file. Export one from this map to see the format.`, true); }
+  };
+
+  // ---- depth levels
+  function renderLevels() {
+    const box = $("levels");
+    box.innerHTML = LEVELS.map((L) => {
+      const n = districts.filter((d) => levelOf(d) === L.id).length;
+      return `<button class="lvl" role="radio" data-level="${L.id}" aria-checked="${L.id === level}"><b>${esc(L.name)}</b><span class="n">${n} ${n === 1 ? "district" : "districts"}</span><small>${esc(L.sub)}</small></button>`;
+    }).join("");
+  }
+  function showLevel() {
+    const i = LEVEL_IDS.indexOf(level), ghost = $("ghost").checked;
+    for (const g of $("tiles").children) {
+      const j = LEVEL_IDS.indexOf(g.dataset.level);
+      g.classList.toggle("off", j !== i && !(ghost && j === i - 1));
+      g.classList.toggle("ghost", ghost && j === i - 1);
+    }
+    const g = $("tiles").querySelector(".ghost"); if (g) $("tiles").appendChild(g);   // the level above floats over this one
+    const L = LEVELS[i];
+    $("levelName").textContent = i === 0 ? "" : L.name;
+    $("levelSub").textContent = `rp_bb_industrial24 · ${L.sub}`;
+    $("legend").innerHTML = L.legend.map(([c, t]) => `<span><i style="background:${c}"></i>${esc(t)}</span>`).join("");
+    $("ghost").closest("label").hidden = i === 0;
+  }
+  function setLevel(id) {
+    if (!LEVEL_IDS.includes(id) || id === level) return;
+    level = id; selected = null; editing = false; pickedPt = -1;
+    $("tEdit").setAttribute("aria-pressed", "false");
+    store.set("c24map.level", level);
+    showLevel(); render();
+    setStatus(`Showing ${LEVELS.find((x) => x.id === id).name}.`);
+  }
+  $("levels").addEventListener("click", (e) => { const b = e.target.closest(".lvl"); if (b) setLevel(b.dataset.level); });
+  $("levels").addEventListener("keydown", (e) => {
+    const i = LEVEL_IDS.indexOf(level);
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); setLevel(LEVEL_IDS[Math.min(i + 1, LEVEL_IDS.length - 1)]); $("levels").querySelector('[aria-checked="true"]').focus(); }
+    if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); setLevel(LEVEL_IDS[Math.max(i - 1, 0)]); $("levels").querySelector('[aria-checked="true"]').focus(); }
+  });
+  $("ghost").addEventListener("change", () => { store.set("c24map.ghost", $("ghost").checked); showLevel(); });
+  $("ghost").checked = store.get("c24map.ghost") === true;
+  showLevel(); renderLevels();
+
+  // ---- pointer: pan, pinch, select, drag vertices / shapes
+  const pointers = new Map();
+  let drag = null;   // {type:'pan'|'pt'|'shape', ...}
+  let pinch = null;
+
+  stage.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".hud, .zoom, .readout")) return;
+    e.preventDefault();                                   // no text selection while dragging the map
+    try { window.getSelection().removeAllRanges(); } catch {}
+    if (document.activeElement && document.activeElement.blur && document.activeElement !== document.body) document.activeElement.blur();
+    stage.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, localXY(e));
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), k: view.k, cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, tx: view.tx, ty: view.ty };
+      drag = null; return;
+    }
+    const [sx, sy] = localXY(e);
+    const t = e.target;
+    const d = districts.find((x) => x.id === selected);
+    if (editing && d && t.dataset.pt !== undefined) {
+      pickedPt = +t.dataset.pt; drag = { type: "pt", i: pickedPt, moved: false, sx, sy }; renderHandles(); applyView(); return;
+    }
+    if (editing && d && t.dataset.mid !== undefined) {
+      const i = +t.dataset.mid, a = d.points[i], b = d.points[(i + 1) % d.points.length];
+      d.points.splice(i + 1, 0, [snap((a[0] + b[0]) / 2), snap((a[1] + b[1]) / 2)]);
+      pickedPt = i + 1; drag = { type: "pt", i: i + 1, moved: true, sx, sy }; changed(); render(); return;
+    }
+    if (editing && d && t.classList.contains("district") && t.dataset.id === selected) {
+      drag = { type: "shape", start: toWorld(...screenToImg(sx, sy)), orig: d.points.map((q) => q.slice()), moved: false, sx, sy }; return;
+    }
+    drag = { type: "pan", sx, sy, tx: view.tx, ty: view.ty, moved: false, target: t };
+  });
+  stage.addEventListener("pointermove", (e) => {
+    const [sx, sy] = localXY(e);
+    const [ix, iy] = screenToImg(sx, sy), [wx, wy] = toWorld(ix, iy);
+    const over = e.target.classList && e.target.classList.contains("district") ? districts.find((d) => d.id === e.target.dataset.id) : null;
+    $("coords").innerHTML = `x <b>${Math.round(wx)}</b> y <b>${Math.round(wy)}</b>` + (over ? ` · <b style="color:${over.color}">${esc(over.name || "Unnamed")}</b>` : "");
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, [sx, sy]);
+    if (pinch && pointers.size >= 2) {
+      const [a, b] = [...pointers.values()];
+      const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const k = Math.max(0.05, Math.min(pinch.k * dist / pinch.d, 6));
+      const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2;
+      view.tx = cx - (pinch.cx - pinch.tx) * (k / pinch.k); view.ty = cy - (pinch.cy - pinch.ty) * (k / pinch.k); view.k = k; applyView();
+      return;
+    }
+    if (!drag) return;
+    if (Math.hypot(sx - drag.sx, sy - drag.sy) > 4) drag.moved = true;
+    const d = districts.find((x) => x.id === selected);
+    if (drag.type === "pan") {
+      if (drag.moved) { stage.classList.add("panning"); view.tx = drag.tx + sx - drag.sx; view.ty = drag.ty + sy - drag.sy; applyView(); }
+    } else if (drag.type === "pt" && d) {
+      d.points[drag.i] = [snap(wx), snap(wy)]; updateShape(d);
+    } else if (drag.type === "shape" && d && drag.moved) {
+      const dx = snap(wx - drag.start[0]), dy = snap(wy - drag.start[1]);
+      d.points = drag.orig.map(([x, y]) => [x + dx, y + dy]); updateShape(d);
+    }
+  });
+  function updateShape(d) {
+    const p = gShapes.querySelector(`[data-id="${d.id}"]`);
+    p.setAttribute("points", d.points.map((q) => toImg(q).join(",")).join(" "));
+    const t = labelOf(d), [cx, cy] = toImg(centroid(d.points));
+    t.setAttribute("x", cx); t.setAttribute("y", cy);
+    renderHandles(); applyView();
+  }
+  function endPointer(e) {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (!drag) return;
+    const dr = drag; drag = null; stage.classList.remove("panning");
+    if (dr.type === "pt" || (dr.type === "shape" && dr.moved)) { changed(); renderList(); return; }
+    if (dr.moved) return;
+    // a click: select whatever was under the pointer
+    const t = dr.type === "shape" ? null : dr.target;
+    if (t && t.classList && t.classList.contains("district")) select(t.dataset.id);
+    else if (dr.type === "pan" && !editing) select(null);
+    else if (dr.type === "pan" && editing) { pickedPt = -1; renderHandles(); applyView(); renderList(); }
+  }
+  stage.addEventListener("pointerup", endPointer);
+  stage.addEventListener("pointercancel", endPointer);
+  stage.addEventListener("pointerleave", () => { $("coords").innerHTML = `x <b>—</b> y <b>—</b>`; });
+  stage.addEventListener("wheel", (e) => { e.preventDefault(); const [sx, sy] = localXY(e); zoomAt(sx, sy, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018))); }, { passive: false });
+  stage.addEventListener("dblclick", (e) => {
+    const t = e.target;
+    if (t.classList.contains("district")) { select(t.dataset.id); const n = $("n-" + t.dataset.id); if (n && canEdit) { n.focus(); n.select(); } }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest("input")) return;
+    if (e.key === "Escape") { if (editing) { editing = false; pickedPt = -1; $("tEdit").setAttribute("aria-pressed", "false"); render(); } else select(null); }
+    else if (e.key === "+" || e.key === "=") $("zIn").click();
+    else if (e.key === "-") $("zOut").click();
+    else if (e.key === "0") fitAll();
+    else if (e.key === "PageDown" || e.key === "]") { e.preventDefault(); setLevel(LEVEL_IDS[Math.min(LEVEL_IDS.indexOf(level) + 1, LEVEL_IDS.length - 1)]); }
+    else if (e.key === "PageUp" || e.key === "[") { e.preventDefault(); setLevel(LEVEL_IDS[Math.max(LEVEL_IDS.indexOf(level) - 1, 0)]); }
+    else if ((e.key === "Delete" || e.key === "Backspace") && editing && pickedPt >= 0) {
+      const d = districts.find((x) => x.id === selected); if (d && d.points.length > 3) { d.points.splice(pickedPt, 1); pickedPt = -1; changed(); render(); }
+    }
+  });
+  window.addEventListener("resize", applyView);
+
+  // ---- boot
+  const lbl = store.get("c24map.labels"), fil = store.get("c24map.fill");
+  if (lbl === false) $("tLabels").click();
+  if (fil === false) $("tFill").click();
+  const saved = store.get("c24map.view");
+  if (saved && saved.k) { Object.assign(view, saved); applyView(); } else requestAnimationFrame(fitAll);
+
+  function useData(data) {
+    districts = (data && Array.isArray(data.districts) ? data.districts : []).map((d, i) => ({
+      id: String(d.id || "d" + i), name: String(d.name || ""), level: normLevel(d.level), color: /^#[0-9a-f]{6}$/i.test(d.color) ? d.color : PALETTE[i % PALETTE.length],
+      points: (d.points || []).filter((p) => Array.isArray(p) && p.length >= 2).map((p) => [+p[0], +p[1]]),
+    })).filter((d) => d.points.length >= 3);
+    savedJSON = serial();
+    const draft = store.get("c24map.draft");
+    if (draft && draft.base === savedJSON && Array.isArray(draft.districts) && JSON.stringify(draft.districts) !== savedJSON) {
+      districts = draft.districts; setStatus("Restored your unsaved edits.");
+    }
+    render();
+  }
+  // Run City Map (citymap_server.py) saves to districts.json; opened as a plain file it keeps edits in the browser.
+  let mode = "local";
+  const seedData = () => { try { return JSON.parse(document.getElementById("seed").textContent); } catch { return { districts: [] }; } };
+  fetch("api/districts", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).catch(() => null).then((data) => {
+    if (data) mode = "server";
+    else data = store.get("c24map.saved") || seedData();
+    canEdit = true; canSave = true;
+    $("tEdit").hidden = false; $("add").hidden = false;
+    $("help").innerHTML = "Drag to pan · scroll or pinch to zoom · click a district to select · rename it in this list · <kbd>Edit shapes</kbd> to drag corners, click a dashed dot to add one, <kbd>Del</kbd> removes the picked corner"
+      + (mode === "server" ? " · saving writes districts.json" : " · opened as a file: Save keeps edits in this browser, Export writes a file");
+    useData(data);
+  });
+})();
+</script>
+</body>
+</html>
