@@ -64,8 +64,13 @@ Using the map
 Files
 -----
 index.html            the map (opens on its own too)
+
 t??.webp              city level render, 3 Hammer units per pixel
+
 s??/n??.webp          sewers / nexus underground floor plans
+
 districts.json        your districts (edit by hand if you like; points are Hammer x, y,
                       "level" is city, sewers or nexus)
+                      
 citymap_server.py     the local launcher (listens on 127.0.0.1 only)
+
