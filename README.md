@@ -3,7 +3,9 @@ A 2D map overview of rp_bb_industrial24_v1_51 with editable districts, and expor
 
 # Setup
 Extract to a separate folder
+
 install python for hot-saving functionality
+
 OR run via html file.
 
 # readme.txt
